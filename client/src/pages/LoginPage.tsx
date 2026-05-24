@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useLocation } from "wouter";
 import MemphisBackground from "@/components/MemphisBackground";
 import { MessageCircle, Mail, Lock, User, Eye, EyeOff } from "lucide-react";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -10,6 +11,7 @@ type Mode = "login" | "register";
 export default function LoginPage() {
   const { theme, toggleTheme } = useTheme();
   const { login, register, isLoggingIn, isRegistering } = useAuth();
+  const [, setLocation] = useLocation();
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -34,6 +36,17 @@ export default function LoginPage() {
         }
         await register(email, password, name);
         toast.success("환영합니다! 🎉");
+      }
+      // After successful auth, check for a saved invite code
+      let pending: string | null = null;
+      try {
+        pending = sessionStorage.getItem("pendingInvite");
+        if (pending) sessionStorage.removeItem("pendingInvite");
+      } catch {
+        // ignore storage errors
+      }
+      if (pending) {
+        setLocation(`/invite/${pending}`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "로그인에 실패했습니다";

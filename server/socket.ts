@@ -1,6 +1,7 @@
 import { Server as HttpServer } from "http";
 import { Server as SocketServer } from "socket.io";
 import { getConversationParticipantIds, upsertPresence } from "./db";
+import { sendPushToUsers, type PushPayload } from "./push";
 
 let io: SocketServer | null = null;
 
@@ -79,6 +80,36 @@ export async function emitNewMessage(conversationId: number, message: unknown) {
   const participantIds = await getConversationParticipantIds(conversationId);
   for (const uid of participantIds) {
     io.to(`user:${uid}`).emit("conversation_updated", { conversationId, message });
+  }
+
+  // Send web push to offline participants (and senders other than self)
+  const msg = message as {
+    senderId?: number;
+    sender?: { id?: number; name?: string | null };
+    content?: string | null;
+    type?: string;
+    fileName?: string | null;
+  };
+  const senderId = msg.sender?.id ?? msg.senderId;
+  const offlineRecipients = participantIds.filter(
+    (uid) => uid !== senderId && !isUserOnline(uid)
+  );
+  if (offlineRecipients.length > 0) {
+    const senderName = msg.sender?.name ?? "새 메시지";
+    const preview =
+      msg.type === "image"
+        ? "📷 사진"
+        : msg.type === "file"
+        ? `📎 ${msg.fileName ?? "파일"}`
+        : (msg.content ?? "").slice(0, 100);
+    const payload: PushPayload = {
+      title: senderName,
+      body: preview,
+      url: `/?conversationId=${conversationId}`,
+      tag: `conv-${conversationId}`,
+    };
+    // Fire-and-forget
+    sendPushToUsers(offlineRecipients, payload).catch(() => {});
   }
 }
 

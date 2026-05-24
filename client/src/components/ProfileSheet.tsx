@@ -11,9 +11,19 @@ import {
   Save,
   X as XIcon,
   Bell,
+  BellOff,
   MessageSquare,
+  Link as LinkIcon,
+  Copy,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
+import {
+  subscribeToPush,
+  unsubscribeFromPush,
+  getPushPermissionState,
+  isPushSupported,
+} from "@/lib/push";
 
 interface ProfileSheetProps {
   open: boolean;
@@ -28,12 +38,40 @@ export default function ProfileSheet({ open, onClose, user, onLogout }: ProfileS
   const [editingStatus, setEditingStatus] = useState(false);
   const [name, setName] = useState(user.name ?? "");
   const [statusMsg, setStatusMsg] = useState("");
+  const [pushState, setPushState] = useState<NotificationPermission | "unsupported">("default");
+  const [pushBusy, setPushBusy] = useState(false);
+  const [inviteBusy, setInviteBusy] = useState(false);
 
   const utils = trpc.useUtils();
   const { data: profile } = trpc.users.getById.useQuery(
     { userId: user.id },
     { enabled: open }
   );
+
+  // Push key + subscription helpers
+  const { data: pushKey } = trpc.push.publicKey.useQuery(undefined, { enabled: open });
+  const subscribePush = trpc.push.subscribe.useMutation();
+  const unsubscribePush = trpc.push.unsubscribe.useMutation();
+
+  // Invite link
+  const { data: myInvites = [] } = trpc.invites.listMine.useQuery(undefined, {
+    enabled: open,
+  });
+  const createInvite = trpc.invites.create.useMutation({
+    onSuccess: () => utils.invites.listMine.invalidate(),
+    onError: (e) => toast.error(e.message),
+  });
+  const revokeInvite = trpc.invites.revoke.useMutation({
+    onSuccess: () => {
+      utils.invites.listMine.invalidate();
+      toast.success("초대 링크를 비활성화했습니다");
+    },
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    getPushPermissionState().then(setPushState);
+  }, [open]);
 
   useEffect(() => {
     setName(user.name ?? "");
@@ -53,19 +91,76 @@ export default function ProfileSheet({ open, onClose, user, onLogout }: ProfileS
     onError: (e) => toast.error(e.message),
   });
 
-  const handleNotifPermission = () => {
-    if (!("Notification" in window)) {
-      toast.error("이 기기는 알림을 지원하지 않아요");
+  const handleTogglePush = async () => {
+    if (!isPushSupported()) {
+      toast.error("이 기기는 푸시 알림을 지원하지 않아요");
       return;
     }
-    if (Notification.permission === "granted") {
-      toast.info("알림이 이미 켜져있어요");
+    if (!pushKey?.publicKey) {
+      toast.error("서버에 푸시 키가 설정되지 않았어요");
       return;
     }
-    Notification.requestPermission().then((p) => {
-      if (p === "granted") toast.success("알림을 켰어요");
-      else toast.error("알림 권한이 거부되었어요");
-    });
+    setPushBusy(true);
+    try {
+      if (pushState === "granted") {
+        const ok = await unsubscribeFromPush(async (endpoint: string) => {
+          await unsubscribePush.mutateAsync({ endpoint });
+        });
+        if (ok) {
+          toast.success("푸시 알림을 껐어요");
+          setPushState("default");
+        }
+      } else {
+        const result = await subscribeToPush(
+          pushKey.publicKey,
+          async (sub: PushSubscription) => {
+            const json = sub.toJSON();
+            if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) {
+              throw new Error("잘못된 구독 정보");
+            }
+            await subscribePush.mutateAsync({
+              endpoint: json.endpoint,
+              keys: { p256dh: json.keys.p256dh, auth: json.keys.auth },
+              userAgent: navigator.userAgent,
+            });
+          }
+        );
+        if (result.ok) {
+          toast.success("푸시 알림을 켰어요");
+          setPushState("granted");
+        } else {
+          toast.error(result.reason ?? "푸시 구독 실패");
+        }
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "푸시 설정 중 오류");
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleCreateInvite = async () => {
+    setInviteBusy(true);
+    try {
+      const result = await createInvite.mutateAsync({ expiresInDays: 30 });
+      const url = `${window.location.origin}/invite/${result.code}`;
+      await navigator.clipboard.writeText(url);
+      toast.success("초대 링크를 복사했어요");
+    } catch {
+      // mutate already handled error toast
+    } finally {
+      setInviteBusy(false);
+    }
+  };
+
+  const handleCopyInvite = async (code: string) => {
+    const url = `${window.location.origin}/invite/${code}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("복사되었습니다");
+    } catch {
+      toast.error("복사에 실패했습니다");
+    }
   };
 
   return (
@@ -210,10 +305,97 @@ export default function ProfileSheet({ open, onClose, user, onLogout }: ProfileS
         {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
         {theme === "dark" ? "라이트 모드" : "다크 모드"}
       </button>
-      <button className="sheet-item" onClick={handleNotifPermission} type="button">
-        <Bell size={18} />
-        알림 허용
+      <button
+        className="sheet-item"
+        onClick={handleTogglePush}
+        disabled={pushBusy || pushState === "unsupported"}
+        type="button"
+      >
+        {pushBusy ? (
+          <Loader2 size={18} className="animate-spin" />
+        ) : pushState === "granted" ? (
+          <Bell size={18} style={{ color: "var(--mint-dark)" }} />
+        ) : (
+          <BellOff size={18} />
+        )}
+        {pushState === "unsupported"
+          ? "이 기기는 푸시 미지원"
+          : pushState === "granted"
+          ? "푸시 알림 끄기"
+          : "푸시 알림 켜기"}
       </button>
+
+      {/* Invite link */}
+      <button
+        className="sheet-item"
+        onClick={handleCreateInvite}
+        disabled={inviteBusy}
+        type="button"
+      >
+        {inviteBusy ? <Loader2 size={18} className="animate-spin" /> : <LinkIcon size={18} />}
+        내 초대 링크 만들고 복사
+      </button>
+      {myInvites.length > 0 && (
+        <div
+          style={{
+            padding: "6px 8px 0",
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+          }}
+        >
+          {(myInvites as { code: string; usedCount: number; maxUses: number | null }[])
+            .slice(0, 3)
+            .map((inv) => (
+              <div
+                key={inv.code}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  background: "var(--bg-muted)",
+                  borderRadius: 10,
+                  padding: "6px 8px",
+                  fontSize: "0.72rem",
+                }}
+              >
+                <code
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                    color: "var(--fg-soft)",
+                  }}
+                >
+                  /invite/{inv.code}
+                </code>
+                <span style={{ color: "var(--fg-muted)", whiteSpace: "nowrap" }}>
+                  {inv.usedCount}/{inv.maxUses ?? "∞"}
+                </span>
+                <button
+                  onClick={() => handleCopyInvite(inv.code)}
+                  className="icon-btn"
+                  style={{ width: 24, height: 24 }}
+                  aria-label="복사"
+                  type="button"
+                >
+                  <Copy size={12} />
+                </button>
+                <button
+                  onClick={() => revokeInvite.mutate({ code: inv.code })}
+                  className="icon-btn"
+                  style={{ width: 24, height: 24, color: "var(--coral)" }}
+                  aria-label="비활성화"
+                  type="button"
+                >
+                  <XIcon size={12} />
+                </button>
+              </div>
+            ))}
+        </div>
+      )}
 
       <div style={{ height: 1, background: "var(--border-soft)", margin: "8px 0" }} />
 

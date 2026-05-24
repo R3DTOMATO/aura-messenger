@@ -4,8 +4,12 @@ import {
   conversationParticipants,
   conversations,
   friends,
+  inviteLinks,
+  messageBookmarks,
   messageReactions,
   messages,
+  pinnedMessages,
+  pushSubscriptions,
   userPresence,
   users,
 } from "../drizzle/schema";
@@ -643,4 +647,458 @@ export async function getMessageConversationId(messageId: number) {
     .where(eq(messages.id, messageId))
     .limit(1);
   return row?.conversationId ?? null;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ── New Feature Functions ──────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+
+// ── Message Search ─────────────────────────────────────────────
+export async function searchMessages(
+  conversationId: number,
+  userId: number,
+  query: string,
+  limit = 30
+) {
+  const db = await getDb();
+  if (!db) return [];
+
+  // Verify the user is in this conversation
+  const [participant] = await db
+    .select()
+    .from(conversationParticipants)
+    .where(
+      and(
+        eq(conversationParticipants.conversationId, conversationId),
+        eq(conversationParticipants.userId, userId)
+      )
+    )
+    .limit(1);
+  if (!participant) return [];
+
+  // LIKE search (works without fulltext index, slower for big datasets)
+  const trimmed = query.trim();
+  if (!trimmed) return [];
+
+  const msgs = await db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        sql`${messages.deletedAt} IS NULL`,
+        ne(messages.type, "system"),
+        like(messages.content, `%${trimmed}%`)
+      )
+    )
+    .orderBy(desc(messages.createdAt))
+    .limit(limit);
+
+  if (msgs.length === 0) return [];
+
+  // Hydrate sender info
+  const senderIds = Array.from(new Set(msgs.map((m) => m.senderId)));
+  const senders = await db
+    .select({ id: users.id, name: users.name, avatarUrl: users.avatarUrl })
+    .from(users)
+    .where(inArray(users.id, senderIds));
+  const senderMap = new Map(senders.map((s) => [s.id, s]));
+
+  return msgs.map((m) => ({
+    ...m,
+    sender: senderMap.get(m.senderId) ?? null,
+  }));
+}
+
+// ── Message Forwarding ─────────────────────────────────────────
+export async function forwardMessage(
+  sourceMessageId: number,
+  targetConversationIds: number[],
+  userId: number
+) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+
+  // Load source message
+  const [source] = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.id, sourceMessageId))
+    .limit(1);
+  if (!source) throw new Error("원본 메시지를 찾을 수 없습니다");
+
+  // Verify user can access source conversation
+  const [sourceParticipant] = await db
+    .select()
+    .from(conversationParticipants)
+    .where(
+      and(
+        eq(conversationParticipants.conversationId, source.conversationId),
+        eq(conversationParticipants.userId, userId)
+      )
+    )
+    .limit(1);
+  if (!sourceParticipant) throw new Error("이 메시지에 접근할 수 없습니다");
+
+  const created: number[] = [];
+  for (const targetConvId of targetConversationIds) {
+    // Verify user is in target conversation
+    const [targetParticipant] = await db
+      .select()
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, targetConvId),
+          eq(conversationParticipants.userId, userId)
+        )
+      )
+      .limit(1);
+    if (!targetParticipant) continue;
+
+    const [result] = await db.insert(messages).values({
+      conversationId: targetConvId,
+      senderId: userId,
+      content: source.content,
+      type: source.type,
+      fileUrl: source.fileUrl,
+      fileKey: source.fileKey,
+      fileName: source.fileName,
+      fileSize: source.fileSize,
+      fileMime: source.fileMime,
+    });
+    const newId = (result as { insertId: number }).insertId;
+    created.push(newId);
+
+    await db
+      .update(conversations)
+      .set({ updatedAt: new Date() })
+      .where(eq(conversations.id, targetConvId));
+  }
+
+  return { forwardedCount: created.length, messageIds: created };
+}
+
+// ── Bookmarks ──────────────────────────────────────────────────
+export async function toggleBookmark(messageId: number, userId: number) {
+  const db = await getDb();
+  if (!db) return { bookmarked: false };
+
+  const existing = await db
+    .select()
+    .from(messageBookmarks)
+    .where(
+      and(
+        eq(messageBookmarks.messageId, messageId),
+        eq(messageBookmarks.userId, userId)
+      )
+    )
+    .limit(1);
+
+  if (existing.length > 0) {
+    await db.delete(messageBookmarks).where(eq(messageBookmarks.id, existing[0].id));
+    return { bookmarked: false };
+  }
+
+  await db.insert(messageBookmarks).values({ messageId, userId });
+  return { bookmarked: true };
+}
+
+export async function listBookmarks(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const rows = await db
+    .select({
+      id: messageBookmarks.id,
+      createdAt: messageBookmarks.createdAt,
+      messageId: messages.id,
+      content: messages.content,
+      type: messages.type,
+      fileUrl: messages.fileUrl,
+      fileName: messages.fileName,
+      conversationId: messages.conversationId,
+      messageCreatedAt: messages.createdAt,
+      senderId: messages.senderId,
+    })
+    .from(messageBookmarks)
+    .innerJoin(messages, eq(messages.id, messageBookmarks.messageId))
+    .where(eq(messageBookmarks.userId, userId))
+    .orderBy(desc(messageBookmarks.createdAt))
+    .limit(100);
+
+  if (rows.length === 0) return [];
+
+  const senderIds = Array.from(new Set(rows.map((r) => r.senderId)));
+  const senders = await db
+    .select({ id: users.id, name: users.name, avatarUrl: users.avatarUrl })
+    .from(users)
+    .where(inArray(users.id, senderIds));
+  const senderMap = new Map(senders.map((s) => [s.id, s]));
+
+  return rows.map((r) => ({
+    ...r,
+    sender: senderMap.get(r.senderId) ?? null,
+  }));
+}
+
+export async function getBookmarkedMessageIds(userId: number, messageIds: number[]) {
+  if (messageIds.length === 0) return new Set<number>();
+  const db = await getDb();
+  if (!db) return new Set<number>();
+  const rows = await db
+    .select({ messageId: messageBookmarks.messageId })
+    .from(messageBookmarks)
+    .where(
+      and(
+        eq(messageBookmarks.userId, userId),
+        inArray(messageBookmarks.messageId, messageIds)
+      )
+    );
+  return new Set(rows.map((r) => r.messageId));
+}
+
+// ── Pinned Messages (공지) ─────────────────────────────────────
+export async function pinMessage(conversationId: number, messageId: number, userId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+
+  // Verify user is in this conversation
+  const [participant] = await db
+    .select()
+    .from(conversationParticipants)
+    .where(
+      and(
+        eq(conversationParticipants.conversationId, conversationId),
+        eq(conversationParticipants.userId, userId)
+      )
+    )
+    .limit(1);
+  if (!participant) throw new Error("권한이 없습니다");
+
+  // Verify message belongs to this conversation
+  const [msg] = await db
+    .select({ conversationId: messages.conversationId })
+    .from(messages)
+    .where(eq(messages.id, messageId))
+    .limit(1);
+  if (!msg || msg.conversationId !== conversationId) {
+    throw new Error("메시지를 찾을 수 없습니다");
+  }
+
+  await db
+    .insert(pinnedMessages)
+    .values({ conversationId, messageId, pinnedBy: userId })
+    .onDuplicateKeyUpdate({ set: { pinnedBy: userId } });
+
+  return { success: true };
+}
+
+export async function unpinMessage(conversationId: number, messageId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .delete(pinnedMessages)
+    .where(
+      and(
+        eq(pinnedMessages.conversationId, conversationId),
+        eq(pinnedMessages.messageId, messageId)
+      )
+    );
+}
+
+export async function listPinnedMessages(conversationId: number) {
+  const db = await getDb();
+  if (!db) return [];
+
+  const rows = await db
+    .select({
+      pinId: pinnedMessages.id,
+      pinnedAt: pinnedMessages.createdAt,
+      pinnedBy: pinnedMessages.pinnedBy,
+      messageId: messages.id,
+      content: messages.content,
+      type: messages.type,
+      fileUrl: messages.fileUrl,
+      fileName: messages.fileName,
+      messageCreatedAt: messages.createdAt,
+      senderId: messages.senderId,
+    })
+    .from(pinnedMessages)
+    .innerJoin(messages, eq(messages.id, pinnedMessages.messageId))
+    .where(eq(pinnedMessages.conversationId, conversationId))
+    .orderBy(desc(pinnedMessages.createdAt))
+    .limit(20);
+
+  if (rows.length === 0) return [];
+
+  const senderIds = Array.from(new Set(rows.map((r) => r.senderId)));
+  const senders = await db
+    .select({ id: users.id, name: users.name, avatarUrl: users.avatarUrl })
+    .from(users)
+    .where(inArray(users.id, senderIds));
+  const senderMap = new Map(senders.map((s) => [s.id, s]));
+
+  return rows.map((r) => ({
+    ...r,
+    sender: senderMap.get(r.senderId) ?? null,
+  }));
+}
+
+// ── Invite Links ───────────────────────────────────────────────
+function generateInviteCode(): string {
+  // 10-character random code
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // omit I, O, 0, 1 for clarity
+  let code = "";
+  for (let i = 0; i < 10; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
+
+export async function createInviteLink(
+  ownerId: number,
+  options: { maxUses?: number; expiresInDays?: number } = {}
+) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+
+  let code = generateInviteCode();
+  // Retry if collision (very rare)
+  for (let i = 0; i < 5; i++) {
+    const existing = await db
+      .select({ id: inviteLinks.id })
+      .from(inviteLinks)
+      .where(eq(inviteLinks.code, code))
+      .limit(1);
+    if (existing.length === 0) break;
+    code = generateInviteCode();
+  }
+
+  const expiresAt = options.expiresInDays
+    ? new Date(Date.now() + options.expiresInDays * 24 * 60 * 60 * 1000)
+    : null;
+
+  await db.insert(inviteLinks).values({
+    code,
+    ownerId,
+    maxUses: options.maxUses ?? null,
+    expiresAt,
+  });
+
+  return { code };
+}
+
+export async function getActiveInviteLinks(ownerId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(inviteLinks)
+    .where(and(eq(inviteLinks.ownerId, ownerId), eq(inviteLinks.isActive, true)))
+    .orderBy(desc(inviteLinks.createdAt))
+    .limit(20);
+}
+
+export async function revokeInviteLink(code: string, ownerId: number) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .update(inviteLinks)
+    .set({ isActive: false })
+    .where(and(eq(inviteLinks.code, code), eq(inviteLinks.ownerId, ownerId)));
+}
+
+export async function consumeInviteLink(code: string, currentUserId: number) {
+  const db = await getDb();
+  if (!db) throw new Error("DB not available");
+
+  const [link] = await db
+    .select()
+    .from(inviteLinks)
+    .where(eq(inviteLinks.code, code))
+    .limit(1);
+
+  if (!link) throw new Error("유효하지 않은 초대 링크입니다");
+  if (!link.isActive) throw new Error("이 초대 링크는 비활성화되었습니다");
+  if (link.expiresAt && link.expiresAt < new Date()) {
+    throw new Error("이 초대 링크는 만료되었습니다");
+  }
+  if (link.maxUses && link.usedCount >= link.maxUses) {
+    throw new Error("이 초대 링크는 사용 횟수를 초과했습니다");
+  }
+  if (link.ownerId === currentUserId) {
+    throw new Error("자기 자신의 초대 링크는 사용할 수 없습니다");
+  }
+
+  // Add mutual friendship (both directions)
+  await db
+    .insert(friends)
+    .values({ userId: currentUserId, friendId: link.ownerId })
+    .onDuplicateKeyUpdate({ set: { isHidden: false, isBlocked: false } });
+  await db
+    .insert(friends)
+    .values({ userId: link.ownerId, friendId: currentUserId })
+    .onDuplicateKeyUpdate({ set: { isHidden: false, isBlocked: false } });
+
+  // Increment use count
+  await db
+    .update(inviteLinks)
+    .set({ usedCount: link.usedCount + 1 })
+    .where(eq(inviteLinks.id, link.id));
+
+  return { ownerId: link.ownerId };
+}
+
+// ── Push Subscriptions ─────────────────────────────────────────
+export async function savePushSubscription(
+  userId: number,
+  data: { endpoint: string; p256dh: string; auth: string; userAgent?: string }
+) {
+  const db = await getDb();
+  if (!db) return;
+
+  // Avoid duplicates by endpoint
+  const existing = await db
+    .select({ id: pushSubscriptions.id })
+    .from(pushSubscriptions)
+    .where(eq(pushSubscriptions.endpoint, data.endpoint))
+    .limit(1);
+
+  if (existing.length > 0) {
+    await db
+      .update(pushSubscriptions)
+      .set({ userId, p256dh: data.p256dh, auth: data.auth, userAgent: data.userAgent ?? null })
+      .where(eq(pushSubscriptions.id, existing[0].id));
+    return;
+  }
+
+  await db.insert(pushSubscriptions).values({
+    userId,
+    endpoint: data.endpoint,
+    p256dh: data.p256dh,
+    auth: data.auth,
+    userAgent: data.userAgent ?? null,
+  });
+}
+
+export async function deletePushSubscription(userId: number, endpoint: string) {
+  const db = await getDb();
+  if (!db) return;
+  await db
+    .delete(pushSubscriptions)
+    .where(
+      and(
+        eq(pushSubscriptions.userId, userId),
+        eq(pushSubscriptions.endpoint, endpoint)
+      )
+    );
+}
+
+export async function getUserPushSubscriptions(userId: number) {
+  const db = await getDb();
+  if (!db) return [];
+  return db
+    .select()
+    .from(pushSubscriptions)
+    .where(eq(pushSubscriptions.userId, userId));
 }

@@ -101,6 +101,28 @@ vi.mock("./db", () => ({
   updateFriend: vi.fn().mockResolvedValue(undefined),
   removeFriend: vi.fn().mockResolvedValue(undefined),
   getDb: vi.fn().mockResolvedValue(null),
+  // Messages router
+  searchMessages: vi.fn().mockResolvedValue([]),
+  forwardMessage: vi.fn().mockResolvedValue({ forwardedCount: 1 }),
+  toggleBookmark: vi.fn().mockResolvedValue({ bookmarked: true }),
+  listBookmarks: vi.fn().mockResolvedValue([]),
+  getBookmarkedMessageIds: vi.fn().mockResolvedValue(new Set<number>()),
+  pinMessage: vi.fn().mockResolvedValue({ success: true }),
+  unpinMessage: vi.fn().mockResolvedValue(undefined),
+  listPinnedMessages: vi.fn().mockResolvedValue([]),
+  // Invites router
+  createInviteLink: vi.fn().mockResolvedValue({ code: "abc123", url: "/invite/abc123" }),
+  getActiveInviteLinks: vi.fn().mockResolvedValue([]),
+  revokeInviteLink: vi.fn().mockResolvedValue(undefined),
+  consumeInviteLink: vi.fn().mockResolvedValue({ ok: true, dmId: 1 }),
+  // Push router
+  savePushSubscription: vi.fn().mockResolvedValue(undefined),
+  deletePushSubscription: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./push", () => ({
+  getVapidPublicKey: vi.fn().mockReturnValue("test-vapid-public-key"),
+  sendPushNotification: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./socket", () => ({
@@ -316,6 +338,101 @@ describe("users.updateProfile", () => {
     const result = await caller.users.updateProfile({
       name: "New Name",
       statusMessage: "Hello!",
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+// ── Messages router ────────────────────────────────────────────
+describe("messages.search", () => {
+  it("returns search results", async () => {
+    const caller = appRouter.createCaller(createCtx(1));
+    const result = await caller.messages.search({
+      conversationId: 1,
+      query: "hello",
+    });
+    expect(Array.isArray(result)).toBe(true);
+  });
+});
+
+describe("messages.forward", () => {
+  it("forwards a message to other conversations", async () => {
+    const caller = appRouter.createCaller(createCtx(1));
+    const result = await caller.messages.forward({
+      sourceMessageId: 1,
+      targetConversationIds: [2, 3],
+    });
+    expect(result).toHaveProperty("forwardedCount");
+  });
+});
+
+describe("messages.toggleBookmark", () => {
+  it("toggles a bookmark", async () => {
+    const caller = appRouter.createCaller(createCtx(1));
+    const result = await caller.messages.toggleBookmark({ messageId: 1 });
+    expect(result).toHaveProperty("bookmarked");
+  });
+});
+
+describe("messages.pin", () => {
+  it("pins a message", async () => {
+    const caller = appRouter.createCaller(createCtx(1));
+    const result = await caller.messages.pin({
+      conversationId: 1,
+      messageId: 1,
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("messages.listPinned", () => {
+  it("lists pinned messages", async () => {
+    const caller = appRouter.createCaller(createCtx(1));
+    const result = await caller.messages.listPinned({ conversationId: 1 });
+    expect(Array.isArray(result)).toBe(true);
+  });
+});
+
+// ── Invites router ─────────────────────────────────────────────
+describe("invites.create", () => {
+  it("creates an invite link", async () => {
+    const caller = appRouter.createCaller(createCtx(1));
+    const result = await caller.invites.create({ expiresInDays: 7 });
+    expect(result).toHaveProperty("code");
+  });
+});
+
+describe("invites.listMine", () => {
+  it("lists my invite links", async () => {
+    const caller = appRouter.createCaller(createCtx(1));
+    const result = await caller.invites.listMine();
+    expect(Array.isArray(result)).toBe(true);
+  });
+});
+
+describe("invites.accept", () => {
+  it("accepts an invite", async () => {
+    const caller = appRouter.createCaller(createCtx(1));
+    const result = await caller.invites.accept({ code: "abc123" });
+    expect(result).toHaveProperty("ok");
+  });
+});
+
+// ── Push router ────────────────────────────────────────────────
+describe("push.publicKey", () => {
+  it("returns the VAPID public key", async () => {
+    const caller = appRouter.createCaller(createCtx(1));
+    const result = await caller.push.publicKey();
+    expect(result).toHaveProperty("publicKey");
+  });
+});
+
+describe("push.subscribe", () => {
+  it("saves a push subscription", async () => {
+    const caller = appRouter.createCaller(createCtx(1));
+    const result = await caller.push.subscribe({
+      endpoint: "https://example.com/push",
+      keys: { p256dh: "a", auth: "b" },
     });
     expect(result.success).toBe(true);
   });

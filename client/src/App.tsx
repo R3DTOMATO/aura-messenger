@@ -7,6 +7,7 @@ import { ThemeProvider, useTheme } from "./contexts/ThemeContext";
 import { useAuth } from "./_core/hooks/useAuth";
 import LoginPage from "./pages/LoginPage";
 import MessengerPage from "./pages/MessengerPage";
+import InviteAcceptPage from "./pages/InviteAcceptPage";
 
 function LoadingDots() {
   return (
@@ -42,6 +43,7 @@ function Router() {
 
   return (
     <Switch>
+      <Route path="/invite/:code" component={InviteAcceptPage} />
       <Route path="/" component={user ? MessengerPage : LoginPage} />
       <Route path="/404" component={NotFound} />
       <Route component={NotFound} />

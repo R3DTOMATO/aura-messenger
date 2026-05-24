@@ -1,6 +1,18 @@
 import React, { useRef, useState } from "react";
 import UserAvatar from "./UserAvatar";
-import { Download, CheckCheck, Check, Reply, Copy, Trash2, SmilePlus } from "lucide-react";
+import {
+  Download,
+  CheckCheck,
+  Check,
+  Reply,
+  Copy,
+  Trash2,
+  Forward,
+  Bookmark,
+  BookmarkCheck,
+  Pin,
+  PinOff,
+} from "lucide-react";
 import { format } from "date-fns";
 import { ko } from "date-fns/locale";
 import { toast } from "sonner";
@@ -36,9 +48,16 @@ interface MessageBubbleProps {
   showTime?: boolean;
   isRead?: boolean;
   currentUserId: number;
+  isBookmarked?: boolean;
+  isPinned?: boolean;
+  highlight?: boolean;
   onReply?: (msg: MessageData) => void;
   onDelete?: (msg: MessageData) => void;
   onReact?: (msg: MessageData, emoji: string) => void;
+  onForward?: (msg: MessageData) => void;
+  onBookmark?: (msg: MessageData) => void;
+  onPin?: (msg: MessageData) => void;
+  onUnpin?: (msg: MessageData) => void;
 }
 
 function formatFileSize(bytes: number) {
@@ -56,9 +75,16 @@ export default function MessageBubble({
   showTime = true,
   isRead = false,
   currentUserId,
+  isBookmarked = false,
+  isPinned = false,
+  highlight = false,
   onReply,
   onDelete,
   onReact,
+  onForward,
+  onBookmark,
+  onPin,
+  onUnpin,
 }: MessageBubbleProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [showReactionPicker, setShowReactionPicker] = useState(false);
@@ -217,7 +243,12 @@ export default function MessageBubble({
     <div
       ref={bubbleRef}
       className={isMe ? "bubble-me" : "bubble-other"}
-      style={{ padding: "8px 12px", position: "relative" }}
+      style={{
+        padding: "8px 12px",
+        position: "relative",
+        boxShadow: highlight ? "0 0 0 3px var(--coral)" : undefined,
+        transition: "box-shadow 0.3s ease",
+      }}
       onTouchStart={startLongPress}
       onTouchEnd={cancelLongPress}
       onTouchCancel={cancelLongPress}
@@ -226,6 +257,54 @@ export default function MessageBubble({
     >
       {replyBlock}
       {renderContent()}
+      {(isBookmarked || isPinned) && (
+        <div
+          style={{
+            position: "absolute",
+            top: -6,
+            right: -6,
+            display: "flex",
+            gap: 2,
+          }}
+        >
+          {isPinned && (
+            <div
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: "50%",
+                background: "var(--coral)",
+                border: "1.5px solid var(--border)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "white",
+              }}
+              title="공지"
+            >
+              <Pin size={10} fill="currentColor" />
+            </div>
+          )}
+          {isBookmarked && (
+            <div
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: "50%",
+                background: "var(--yellow)",
+                border: "1.5px solid var(--border)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "var(--ink)",
+              }}
+              title="북마크"
+            >
+              <Bookmark size={10} fill="currentColor" />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 
@@ -315,9 +394,48 @@ export default function MessageBubble({
         >
           <Reply size={18} /> 답장
         </button>
+        {onForward && (
+          <button
+            className="sheet-item"
+            onClick={() => {
+              onForward(message);
+              setMenuOpen(false);
+            }}
+            type="button"
+          >
+            <Forward size={18} /> 전달
+          </button>
+        )}
         {message.type === "text" && (
           <button className="sheet-item" onClick={handleCopy} type="button">
             <Copy size={18} /> 복사
+          </button>
+        )}
+        {onBookmark && (
+          <button
+            className="sheet-item"
+            onClick={() => {
+              onBookmark(message);
+              setMenuOpen(false);
+            }}
+            type="button"
+          >
+            {isBookmarked ? <BookmarkCheck size={18} /> : <Bookmark size={18} />}
+            {isBookmarked ? "북마크 해제" : "북마크"}
+          </button>
+        )}
+        {(onPin || onUnpin) && (
+          <button
+            className="sheet-item"
+            onClick={() => {
+              if (isPinned) onUnpin?.(message);
+              else onPin?.(message);
+              setMenuOpen(false);
+            }}
+            type="button"
+          >
+            {isPinned ? <PinOff size={18} /> : <Pin size={18} />}
+            {isPinned ? "공지 해제" : "공지로 등록"}
           </button>
         )}
         {isMe && (

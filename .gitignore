@@ -119,4 +119,3 @@ service-account*.json
 
 # Local upload directory (if used)
 uploads/
-firebase-key.json

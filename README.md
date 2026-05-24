@@ -7,14 +7,19 @@
 - 이메일/비밀번호 회원가입 및 로그인 (자체 인증, scrypt + JWT)
 - 1:1 채팅 + 그룹 채팅
 - 친구 목록, 즐겨찾기, 숨김, 차단
-- 메시지 답장, 이모지 리액션, 길게 누르기 메뉴
+- 메시지 답장, 전달, 이모지 리액션, 길게 누르기 메뉴
 - 메시지 삭제 (소프트 삭제)
+- **메시지 검색** — 채팅방 내 단어로 메시지 찾기, 결과 클릭 시 해당 메시지로 점프
+- **공지사항(핀)** — 채팅방 상단에 중요 메시지 고정
+- **북마크** — 본인만 볼 수 있는 즐겨찾기 메시지
+- **친구 초대 링크** — `/invite/<code>` 링크 한 번 클릭으로 친구 추가
+- **푸시 알림** — Service Worker + Web Push API, 브라우저 닫혀있어도 알림 수신
 - 채팅방 상단 고정, 알림 끄기, 나가기
 - 프로필 편집 (이름, 상태 메시지)
 - 다크 모드
 - 실시간 입력 중 인디케이터, 읽음 표시
 - 모바일 친화적 UI (`100dvh`, safe-area, 바텀시트, 하단 탭바)
-- 이미지·파일 첨부 (로컬 파일 시스템 저장)
+- 이미지·파일 첨부 (Firebase Cloud Storage)
 
 ## 사전 준비
 
@@ -23,6 +28,11 @@
    ```sql
    CREATE DATABASE aura_messenger CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
    ```
+3. **(선택) VAPID 키 생성** — 푸시 알림 사용 시:
+   ```bash
+   npx web-push generate-vapid-keys
+   ```
+   출력된 public/private 키를 `.env`의 `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`에 넣으세요.
 
 ## 설치 및 실행
 

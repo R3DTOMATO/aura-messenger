@@ -4,6 +4,8 @@ import MessageBubble, { MessageData } from "./MessageBubble";
 import MessageInput from "./MessageInput";
 import UserAvatar from "./UserAvatar";
 import BottomSheet from "./BottomSheet";
+import MessageSearchPanel from "./MessageSearchPanel";
+import ForwardMessageModal from "./ForwardMessageModal";
 import {
   ArrowLeft,
   MoreVertical,
@@ -15,6 +17,10 @@ import {
   BellOff,
   LogOut as LeaveIcon,
   Users,
+  Search,
+  X,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { format, isToday, isYesterday, isSameDay } from "date-fns";
 import { ko } from "date-fns/locale";
@@ -57,9 +63,14 @@ export default function ChatRoom({
   const [readByOther, setReadByOther] = useState(false);
   const [replyTo, setReplyTo] = useState<MessageData | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [forwardMessage, setForwardMessage] = useState<MessageData | null>(null);
+  const [highlightId, setHighlightId] = useState<number | null>(null);
+  const [pinnedExpanded, setPinnedExpanded] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isFirstLoadRef = useRef(true);
+  const messageRefs = useRef<Map<number, HTMLDivElement>>(new Map());
 
   const utils = trpc.useUtils();
 
@@ -68,11 +79,50 @@ export default function ChatRoom({
     { refetchOnWindowFocus: false }
   );
 
+  // Pinned messages
+  const { data: pinnedMessages = [] } = trpc.messages.listPinned.useQuery(
+    { conversationId },
+    { refetchOnWindowFocus: false }
+  );
+
+  // Bookmarked message IDs (filtered to current message set)
+  const messageIds = (fetchedMessages as MessageData[]).map((m) => m.id);
+  const { data: bookmarkedIds = [] } = trpc.messages.getBookmarkedIds.useQuery(
+    { messageIds },
+    { enabled: messageIds.length > 0, refetchOnWindowFocus: false }
+  );
+  const bookmarkedSet = new Set(bookmarkedIds);
+  const pinnedSet = new Set(
+    (pinnedMessages as { messageId: number }[]).map((m) => m.messageId)
+  );
+
   const markRead = trpc.chat.markRead.useMutation();
   const deleteMsg = trpc.chat.deleteMessage.useMutation({
     onError: (e) => toast.error(e.message),
   });
   const toggleReaction = trpc.chat.toggleReaction.useMutation();
+  const toggleBookmark = trpc.messages.toggleBookmark.useMutation({
+    onSuccess: (data) => {
+      utils.messages.getBookmarkedIds.invalidate();
+      utils.messages.listBookmarks.invalidate();
+      toast.success(data.bookmarked ? "북마크되었습니다" : "북마크가 해제되었습니다");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const pinMsg = trpc.messages.pin.useMutation({
+    onSuccess: () => {
+      utils.messages.listPinned.invalidate();
+      toast.success("공지로 등록되었습니다");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+  const unpinMsg = trpc.messages.unpin.useMutation({
+    onSuccess: () => {
+      utils.messages.listPinned.invalidate();
+      toast.success("공지가 해제되었습니다");
+    },
+    onError: (e) => toast.error(e.message),
+  });
   const updateSettings = trpc.chat.updateSettings.useMutation({
     onSuccess: () => utils.chat.listConversations.invalidate(),
   });
@@ -239,6 +289,36 @@ export default function ChatRoom({
     toggleReaction.mutate({ messageId: msg.id, emoji });
   };
 
+  const handleForward = (msg: MessageData) => {
+    setForwardMessage(msg);
+  };
+
+  const handleBookmark = (msg: MessageData) => {
+    toggleBookmark.mutate({ messageId: msg.id });
+  };
+
+  const handlePin = (msg: MessageData) => {
+    pinMsg.mutate({ conversationId, messageId: msg.id });
+  };
+
+  const handleUnpin = (msg: MessageData) => {
+    unpinMsg.mutate({ conversationId, messageId: msg.id });
+  };
+
+  // Jump to a specific message (used by search & pinned banner)
+  const jumpToMessage = (messageId: number) => {
+    const el = messageRefs.current.get(messageId);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightId(messageId);
+      setTimeout(() => setHighlightId(null), 2000);
+      setShowSearch(false);
+    } else {
+      toast.info("이전 메시지를 불러오는 중...");
+      // TODO: load more messages and try again
+    }
+  };
+
   // Group messages by date + sender clustering
   const groupedByDate = messages.reduce<{ date: Date; msgs: MessageData[] }[]>(
     (acc, msg) => {
@@ -325,6 +405,18 @@ export default function ChatRoom({
         <div className="flex items-center gap-1">
           <button
             className="icon-btn"
+            onClick={() => setShowSearch((v) => !v)}
+            title="대화 내 검색"
+            aria-label="검색"
+            type="button"
+            style={{
+              background: showSearch ? "var(--yellow)" : "transparent",
+            }}
+          >
+            <Search size={18} />
+          </button>
+          <button
+            className="icon-btn hidden md:inline-flex"
             onClick={() => toast.info("음성통화 기능은 준비 중입니다")}
             title="음성통화"
             aria-label="음성통화"
@@ -333,7 +425,7 @@ export default function ChatRoom({
             <Phone size={18} />
           </button>
           <button
-            className="icon-btn"
+            className="icon-btn hidden md:inline-flex"
             onClick={() => toast.info("영상통화 기능은 준비 중입니다")}
             title="영상통화"
             aria-label="영상통화"
@@ -352,6 +444,102 @@ export default function ChatRoom({
           </button>
         </div>
       </div>
+
+      {/* Pinned messages banner */}
+      {pinnedMessages.length > 0 && (
+        <div
+          style={{
+            background: "var(--yellow)",
+            borderBottom: "1.5px solid var(--border)",
+            padding: "8px 12px",
+          }}
+        >
+          <button
+            onClick={() => setPinnedExpanded((v) => !v)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              width: "100%",
+              background: "transparent",
+              border: 0,
+              padding: 0,
+              cursor: "pointer",
+              textAlign: "left",
+              color: "var(--ink)",
+            }}
+            type="button"
+          >
+            <Pin size={14} fill="currentColor" style={{ flexShrink: 0 }} />
+            <span className="font-bold text-xs flex-shrink-0">공지</span>
+            <span
+              className="text-xs flex-1 truncate"
+              style={{ opacity: 0.85 }}
+            >
+              {(pinnedMessages[0] as { content: string | null }).content ??
+                "(미디어 메시지)"}
+            </span>
+            {pinnedMessages.length > 1 && (
+              <span
+                style={{
+                  fontSize: "0.7rem",
+                  fontWeight: 700,
+                  padding: "1px 6px",
+                  borderRadius: 999,
+                  background: "rgba(0,0,0,0.15)",
+                }}
+              >
+                +{pinnedMessages.length - 1}
+              </span>
+            )}
+            {pinnedExpanded ? (
+              <ChevronUp size={14} style={{ flexShrink: 0 }} />
+            ) : (
+              <ChevronDown size={14} style={{ flexShrink: 0 }} />
+            )}
+          </button>
+          {pinnedExpanded && (
+            <div className="mt-2 space-y-1.5">
+              {(
+                pinnedMessages as {
+                  messageId: number;
+                  content: string | null;
+                  sender: { name: string | null } | null;
+                }[]
+              ).map((pm) => (
+                <button
+                  key={pm.messageId}
+                  onClick={() => {
+                    jumpToMessage(pm.messageId);
+                    setPinnedExpanded(false);
+                  }}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    background: "rgba(255,255,255,0.5)",
+                    border: "1px solid rgba(0,0,0,0.15)",
+                    borderRadius: 8,
+                    padding: "6px 10px",
+                    cursor: "pointer",
+                    color: "var(--ink)",
+                  }}
+                  type="button"
+                >
+                  <div
+                    style={{ fontSize: "0.7rem", fontWeight: 700, opacity: 0.7 }}
+                  >
+                    {pm.sender?.name ?? "이름 없음"}
+                  </div>
+                  <div className="text-xs line-clamp-2">
+                    {pm.content ?? "(미디어 메시지)"}
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Messages */}
       <div
@@ -425,18 +613,32 @@ export default function ChatRoom({
                       msgs[idx + 1]?.sender?.id !== currentUserId);
 
                   return (
-                    <MessageBubble
+                    <div
                       key={msg.id}
-                      message={msg}
-                      isMe={isMe}
-                      showAvatar={showAvatar}
-                      showTime={showTime}
-                      isRead={isLastFromMe && readByOther}
-                      currentUserId={currentUserId}
-                      onReply={handleReply}
-                      onDelete={handleDelete}
-                      onReact={handleReact}
-                    />
+                      ref={(el) => {
+                        if (el) messageRefs.current.set(msg.id, el);
+                        else messageRefs.current.delete(msg.id);
+                      }}
+                    >
+                      <MessageBubble
+                        message={msg}
+                        isMe={isMe}
+                        showAvatar={showAvatar}
+                        showTime={showTime}
+                        isRead={isLastFromMe && readByOther}
+                        currentUserId={currentUserId}
+                        isBookmarked={bookmarkedSet.has(msg.id)}
+                        isPinned={pinnedSet.has(msg.id)}
+                        highlight={highlightId === msg.id}
+                        onReply={handleReply}
+                        onDelete={handleDelete}
+                        onReact={handleReact}
+                        onForward={handleForward}
+                        onBookmark={handleBookmark}
+                        onPin={handlePin}
+                        onUnpin={handleUnpin}
+                      />
+                    </div>
                   );
                 })}
               </div>
@@ -538,6 +740,16 @@ export default function ChatRoom({
               {conv.isMuted ? "알림 켜기" : "알림 끄기"}
             </button>
             <button
+              className="sheet-item"
+              onClick={() => {
+                setShowSearch(true);
+                setShowSettings(false);
+              }}
+              type="button"
+            >
+              <Search size={18} /> 대화 내 검색
+            </button>
+            <button
               className="sheet-item destructive"
               onClick={() => {
                 if (confirm("정말 이 채팅방에서 나가시겠습니까?")) {
@@ -552,6 +764,30 @@ export default function ChatRoom({
           </>
         )}
       </BottomSheet>
+
+      {/* Search panel */}
+      {showSearch && (
+        <MessageSearchPanel
+          conversationId={conversationId}
+          onClose={() => setShowSearch(false)}
+          onJumpToMessage={jumpToMessage}
+        />
+      )}
+
+      {/* Forward modal */}
+      {forwardMessage && (
+        <ForwardMessageModal
+          sourceMessageId={forwardMessage.id}
+          sourceMessagePreview={
+            forwardMessage.type === "image"
+              ? "📷 사진"
+              : forwardMessage.type === "file"
+              ? `📎 ${forwardMessage.fileName ?? "파일"}`
+              : forwardMessage.content ?? ""
+          }
+          onClose={() => setForwardMessage(null)}
+        />
+      )}
     </div>
   );
 }

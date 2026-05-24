@@ -116,6 +116,66 @@ export const messageReactions = mysqlTable(
 
 export type MessageReaction = typeof messageReactions.$inferSelect;
 
+// ── Bookmarked Messages (개인 즐겨찾기) ────────────────────────
+export const messageBookmarks = mysqlTable(
+  "message_bookmarks",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    messageId: bigint("messageId", { mode: "number" }).notNull(),
+    userId: int("userId").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("msg_user_bookmark").on(t.messageId, t.userId),
+  })
+);
+
+export type MessageBookmark = typeof messageBookmarks.$inferSelect;
+
+// ── Pinned Messages (채팅방 공지) ─────────────────────────────
+export const pinnedMessages = mysqlTable(
+  "pinned_messages",
+  {
+    id: int("id").autoincrement().primaryKey(),
+    conversationId: int("conversationId").notNull(),
+    messageId: bigint("messageId", { mode: "number" }).notNull(),
+    pinnedBy: int("pinnedBy").notNull(),
+    createdAt: timestamp("createdAt").defaultNow().notNull(),
+  },
+  (t) => ({
+    uniq: uniqueIndex("conv_msg_pin").on(t.conversationId, t.messageId),
+  })
+);
+
+export type PinnedMessage = typeof pinnedMessages.$inferSelect;
+
+// ── Invite Links (친구 초대) ──────────────────────────────────
+export const inviteLinks = mysqlTable("invite_links", {
+  id: int("id").autoincrement().primaryKey(),
+  code: varchar("code", { length: 32 }).notNull().unique(),
+  ownerId: int("ownerId").notNull(),
+  isActive: boolean("isActive").default(true).notNull(),
+  usedCount: int("usedCount").default(0).notNull(),
+  maxUses: int("maxUses"), // null = unlimited
+  expiresAt: timestamp("expiresAt"),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type InviteLink = typeof inviteLinks.$inferSelect;
+
+// ── Push Subscriptions (브라우저 푸시) ────────────────────────
+export const pushSubscriptions = mysqlTable("push_subscriptions", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("userId").notNull(),
+  endpoint: text("endpoint").notNull(),
+  p256dh: varchar("p256dh", { length: 255 }).notNull(),
+  auth: varchar("auth", { length: 255 }).notNull(),
+  userAgent: varchar("userAgent", { length: 255 }),
+  createdAt: timestamp("createdAt").defaultNow().notNull(),
+});
+
+export type PushSubscription = typeof pushSubscriptions.$inferSelect;
+
 // ── User Presence ──────────────────────────────────────────────
 export const userPresence = mysqlTable("user_presence", {
   userId: int("userId").primaryKey(),
