@@ -111,3 +111,12 @@ temp/
 
 # Manus version file (auto-generated, not part of source)
 client/public/__manus__/version.json
+
+# Firebase service account keys
+firebase-key.json
+firebase-*.json
+service-account*.json
+
+# Local upload directory (if used)
+uploads/
+firebase-key.json
