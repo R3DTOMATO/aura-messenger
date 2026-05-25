@@ -32,6 +32,10 @@ interface ChatRoomProps {
   currentUserId: number;
   onBack?: () => void;
   onlineUserIds: Set<number>;
+  onStartCall?: (
+    peer: { id: number; name: string | null; avatarUrl: string | null },
+    kind: "audio" | "video"
+  ) => void;
 }
 
 type ConvDetail = {
@@ -57,6 +61,7 @@ export default function ChatRoom({
   currentUserId,
   onBack,
   onlineUserIds,
+  onStartCall,
 }: ChatRoomProps) {
   const [messages, setMessages] = useState<MessageData[]>([]);
   const [typingUsers, setTypingUsers] = useState<Set<number>>(new Set());
@@ -417,7 +422,21 @@ export default function ChatRoom({
           </button>
           <button
             className="icon-btn hidden md:inline-flex"
-            onClick={() => toast.info("음성통화 기능은 준비 중입니다")}
+            onClick={() => {
+              if (conv?.type === "group") {
+                toast.info("그룹 통화는 아직 지원되지 않습니다");
+                return;
+              }
+              if (!otherUser) {
+                toast.error("상대방을 찾을 수 없습니다");
+                return;
+              }
+              if (!onlineUserIds.has(otherUser.id)) {
+                toast.info("상대방이 오프라인 상태입니다");
+                return;
+              }
+              onStartCall?.(otherUser, "audio");
+            }}
             title="음성통화"
             aria-label="음성통화"
             type="button"
@@ -426,7 +445,21 @@ export default function ChatRoom({
           </button>
           <button
             className="icon-btn hidden md:inline-flex"
-            onClick={() => toast.info("영상통화 기능은 준비 중입니다")}
+            onClick={() => {
+              if (conv?.type === "group") {
+                toast.info("그룹 통화는 아직 지원되지 않습니다");
+                return;
+              }
+              if (!otherUser) {
+                toast.error("상대방을 찾을 수 없습니다");
+                return;
+              }
+              if (!onlineUserIds.has(otherUser.id)) {
+                toast.info("상대방이 오프라인 상태입니다");
+                return;
+              }
+              onStartCall?.(otherUser, "video");
+            }}
             title="영상통화"
             aria-label="영상통화"
             type="button"

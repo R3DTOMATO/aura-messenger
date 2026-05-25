@@ -4,9 +4,11 @@ import ConversationList from "@/components/ConversationList";
 import ChatRoom from "@/components/ChatRoom";
 import FriendsList from "@/components/FriendsList";
 import ProfileSheet from "@/components/ProfileSheet";
+import CallScreen from "@/components/CallScreen";
 import UserAvatar from "@/components/UserAvatar";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
+import { useCall, type CallKind } from "@/hooks/useCall";
 import { trpc } from "@/lib/trpc";
 import { useTheme } from "@/contexts/ThemeContext";
 import { MessageCircle, Users as UsersIcon, Settings, Moon, Sun } from "lucide-react";
@@ -26,6 +28,12 @@ export default function MessengerPage() {
   const { theme, toggleTheme } = useTheme();
 
   useSocket(user?.id);
+
+  const callApi = useCall({
+    currentUser: user
+      ? { id: user.id, name: user.name, avatarUrl: user.avatarUrl }
+      : null,
+  });
 
   const utils = trpc.useUtils();
   const createDM = trpc.chat.getOrCreateDM.useMutation({
@@ -310,6 +318,7 @@ export default function MessengerPage() {
               currentUserId={user.id}
               onBack={handleBack}
               onlineUserIds={onlineUserIds}
+              onStartCall={(peer, kind) => callApi.startCall(peer, kind)}
             />
           ) : (
             <EmptyState />
@@ -327,6 +336,19 @@ export default function MessengerPage() {
           avatarUrl: user.avatarUrl,
         }}
         onLogout={handleLogout}
+      />
+
+      <CallScreen
+        state={callApi.callState}
+        localStream={callApi.localStream}
+        remoteStream={callApi.remoteStream}
+        muted={callApi.muted}
+        cameraOff={callApi.cameraOff}
+        onAccept={callApi.acceptCall}
+        onReject={callApi.rejectCall}
+        onEnd={callApi.endCall}
+        onToggleMute={callApi.toggleMute}
+        onToggleCamera={callApi.toggleCamera}
       />
     </div>
   );

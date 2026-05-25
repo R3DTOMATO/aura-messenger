@@ -8,6 +8,13 @@ let io: SocketServer | null = null;
 // Map userId -> Set of socketIds
 const userSockets = new Map<number, Set<string>>();
 
+// Map userId -> other userId in active call (both directions stored)
+const activeCallPeers = new Map<number, number>();
+
+export function isUserInCall(userId: number): boolean {
+  return activeCallPeers.has(userId);
+}
+
 export function initSocketIO(httpServer: HttpServer) {
   io = new SocketServer(httpServer, {
     cors: { origin: "*", methods: ["GET", "POST"] },
@@ -61,6 +68,90 @@ export function initSocketIO(httpServer: HttpServer) {
           broadcastPresence(userId, false);
         }
       }
+      // Notify any peers that were in a call with this user
+      activeCallPeers.forEach((peerId, callerId) => {
+        if (callerId === userId || peerId === userId) {
+          const otherSide = callerId === userId ? peerId : callerId;
+          if (!io) return;
+          io.to(`user:${otherSide}`).emit("call_ended", {
+            from: userId,
+            reason: "disconnected",
+          });
+          activeCallPeers.delete(callerId);
+        }
+      });
+    });
+
+    // ── WebRTC signaling ─────────────────────────────────────
+    // Caller → Callee: incoming call invitation
+    socket.on(
+      "call_invite",
+      (payload: {
+        toUserId: number;
+        kind: "audio" | "video";
+        caller: { id: number; name: string | null; avatarUrl: string | null };
+      }) => {
+        if (!io) return;
+        // Reject if callee is already in a call
+        if (isUserInCall(payload.toUserId)) {
+          socket.emit("call_rejected", {
+            from: payload.toUserId,
+            reason: "busy",
+          });
+          return;
+        }
+        io.to(`user:${payload.toUserId}`).emit("call_invite", {
+          from: userId,
+          caller: payload.caller,
+          kind: payload.kind,
+        });
+      }
+    );
+
+    // Callee accepts → establish peer mapping
+    socket.on("call_accept", (payload: { toUserId: number }) => {
+      if (!io) return;
+      activeCallPeers.set(userId, payload.toUserId);
+      activeCallPeers.set(payload.toUserId, userId);
+      io.to(`user:${payload.toUserId}`).emit("call_accepted", { from: userId });
+    });
+
+    // Callee declines
+    socket.on(
+      "call_reject",
+      (payload: { toUserId: number; reason?: string }) => {
+        if (!io) return;
+        io.to(`user:${payload.toUserId}`).emit("call_rejected", {
+          from: userId,
+          reason: payload.reason ?? "rejected",
+        });
+      }
+    );
+
+    // SDP offer/answer relay
+    socket.on(
+      "call_signal",
+      (payload: {
+        toUserId: number;
+        data: unknown; // SDP or ICE candidate
+      }) => {
+        if (!io) return;
+        io.to(`user:${payload.toUserId}`).emit("call_signal", {
+          from: userId,
+          data: payload.data,
+        });
+      }
+    );
+
+    // Either side ends the call
+    socket.on("call_end", (payload: { toUserId: number }) => {
+      if (!io) return;
+      activeCallPeers.delete(userId);
+      activeCallPeers.delete(payload.toUserId);
+      io.to(`user:${payload.toUserId}`).emit("call_ended", {
+        from: userId,
+        reason: "ended",
+      });
     });
   });
 

@@ -14,6 +14,7 @@
 - **북마크** — 본인만 볼 수 있는 즐겨찾기 메시지
 - **친구 초대 링크** — `/invite/<code>` 링크 한 번 클릭으로 친구 추가
 - **푸시 알림** — Service Worker + Web Push API, 브라우저 닫혀있어도 알림 수신
+- **음성/영상 통화 (1:1)** — WebRTC P2P 연결, STUN 서버 사용, 그룹 통화는 미지원
 - 채팅방 상단 고정, 알림 끄기, 나가기
 - 프로필 편집 (이름, 상태 메시지)
 - 다크 모드
@@ -125,3 +126,6 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 - **Windows에서 `npm install` 실패** — `npm install --legacy-peer-deps` 옵션으로 시도. (React 19 + `@emoji-mart/react`의 peer dep 충돌)
 - **로그인 후 쿠키가 안 박힘** — 개발에선 HTTP라 `secure: false`로 자동 처리되고 `sameSite: lax`라 정상 작동합니다. 운영에선 반드시 HTTPS를 쓰세요.
 - **WebSocket 연결 안 됨** — Vite dev proxy가 `/api` 경로를 백엔드(3000번 포트)로 프록시합니다. 브라우저는 5173(Vite)이 아니라 3000을 직접 열어야 통합 환경이 작동합니다.
+- **통화가 연결 안 됨** — WebRTC P2P 연결은 STUN(Google 무료)만 사용합니다. 회사·기숙사 등 엄격한 방화벽이나 일부 모바일 통신사에선 직접 연결이 안 될 수 있어요. 같은 WiFi에서는 거의 항상 동작합니다. 운영에서 모든 환경 지원이 필요하면 TURN 서버(Twilio, Cloudflare 등)를 별도 설정해 `useCall.ts`의 `ICE_SERVERS`에 추가하세요.
+- **마이크/카메라 권한 거부** — 브라우저 주소창의 자물쇠 아이콘 → 사이트 설정 → 마이크/카메라 허용으로 변경. HTTPS 또는 localhost에서만 권한 요청 가능합니다.
+- **음성통화/영상통화 버튼이 회색** — 상대방이 오프라인이면 비활성화됩니다. 모바일에선 화면 공간 절약을 위해 헤더에서 숨겨져 있어요 (더보기 메뉴에서 사용).
